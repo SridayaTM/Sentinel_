@@ -1,0 +1,6 @@
+road.mp4
+clips/
+*.jsonl
+eval_events/
+runs/
+*.zip
