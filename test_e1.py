@@ -289,3 +289,30 @@ def test_one_vehicle_detected_twice_is_not_a_crash():
     b = Veh(2, "truck", path(104, sp), size=lambda t: (114.0, 66.0))
     det, ev = run([a, b], 9)
     assert ev == [] and "duplicate_box" in reasons(det)
+
+
+def _slow_crash(fps, dt_shift=0.0):
+    th = 3.5 + dt_shift
+    a, b = head_on(x0a=-900, x0b=-900 + 800 + 600 * (th - 1.1), t_hit=th)
+    return run([a, b], 20, fps=fps)
+
+
+def test_crash_is_still_found_at_3_and_2_frames_per_second():
+    for fps in (3, 2):
+        for shift in (0.0, 0.08, 0.16):
+            det, ev = _slow_crash(fps, shift)
+            assert len(ev) == 1, (fps, shift, reasons(det))
+
+
+def test_near_miss_at_2_fps_is_still_not_a_crash():
+    a = Veh(1, "car", path(-900, ramp(300, 3.5, 0.5)))
+    b = Veh(2, "car", path(-900 + 800 + 600 * 2.4 + 80, lambda t: 0.0))
+    det, ev = run([a, b], 20, fps=2)
+    assert ev == []
+
+
+def test_big_jump_is_still_an_id_swap_at_2_fps():
+    a, b = head_on(x0a=-900, x0b=200.0)
+    b.x_offset = lambda t: -2000.0 if t >= 3.0 else 0.0
+    det, ev = run([a, b], 20, fps=2)
+    assert ev == []

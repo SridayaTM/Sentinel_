@@ -46,6 +46,7 @@ class E1Config:
     stationary_s: float = 2.0       # both must stay still this long
     max_wait_s: float = 8.0         # give up on a contact that never settles
     jump_ratio: float = 1.5         # one-frame centre jump (in sizes) that signals an ID swap
+    v_max: float = 6.0              # sizes/s: fastest believable motion; a jump is only suspicious beyond v_max * frame interval
     pre_window_s: float = 1.0       # look-back for pre-contact speed and for jump checks
     ar_change: float = 1.6          # two-wheeler: box aspect ratio must change by this factor
     ar_hold_s: float = 0.4          # ...and stay changed this long
@@ -97,17 +98,18 @@ class _Track:
         recent = self.samples[-10:]
         return statistics.median(math.sqrt(max(s.w * s.h, 1e-9)) for s in recent)
 
-    def add(self, t: float, box: Box, cfg: E1Config) -> None:
+    def add(self, t: float, box: Box, cfg: E1Config, gap_s: Optional[float] = None) -> None:
+        gap_s = cfg.max_gap_s if gap_s is None else gap_s
         x1, y1, x2, y2 = box
         w, h = x2 - x1, y2 - y1
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
         size = max(math.sqrt(max(w * h, 1e-9)), 1e-6)
         prev = self.samples[-1] if self.samples else None
-        if prev is None or t - prev.t > cfg.max_gap_s:
+        if prev is None or t - prev.t > gap_s:
             self.cont = 1
         else:
             self.cont += 1
-            if math.hypot(cx - prev.cx, cy - prev.cy) > cfg.jump_ratio * size:
+            if math.hypot(cx - prev.cx, cy - prev.cy) > max(cfg.jump_ratio, cfg.v_max * (t - prev.t)) * size:
                 self.last_jump_t = t
         speed = 0.0
         k = min(cfg.speed_window, self.cont - 1)
@@ -171,6 +173,9 @@ class E1Detector:
         self.disabled = False
         self._recent: list[E1Event] = []
         self._fall: dict[int, dict] = {}
+        self._dts: list[float] = []
+        self._last_t: Optional[float] = None
+        self._gap_s = cfg.max_gap_s
 
     # ------------------------------------------------------------------ public
     def update(
@@ -191,12 +196,19 @@ class E1Detector:
             return []
         self.disabled = False
 
+        # the 'track lost' limit follows the real frame interval, so slow frame rates still work
+        if self._last_t is not None and t > self._last_t:
+            self._dts.append(t - self._last_t)
+            del self._dts[:-20]
+            self._gap_s = max(cfg.max_gap_s, 2.5 * statistics.median(self._dts))
+        self._last_t = t
+
         present: list[_Track] = []
         for tid, cls, box in dets:
             tr = self.tracks.get(tid)
             if tr is None:
                 tr = self.tracks[tid] = _Track(tid, cls)
-            tr.add(t, box, cfg)
+            tr.add(t, box, cfg, self._gap_s)
             present.append(tr)
         for tid in [k for k, tr in self.tracks.items() if t - tr.last_seen_t > 5.0]:
             del self.tracks[tid]
@@ -272,7 +284,7 @@ class E1Detector:
             if age > cfg.max_wait_s:
                 self._reject(t, key, "no_stop", drop=True)
                 continue
-            if t - a.last_seen_t > cfg.max_gap_s or t - b.last_seen_t > cfg.max_gap_s:
+            if t - a.last_seen_t > self._gap_s or t - b.last_seen_t > self._gap_s:
                 self._reject(t, key, "lost_after_contact", drop=True)
                 continue
             if a.tid not in seen_now or b.tid not in seen_now:

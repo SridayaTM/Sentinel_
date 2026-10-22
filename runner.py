@@ -20,6 +20,7 @@ import sys
 from dataclasses import asdict
 from typing import Callable, Iterable, Optional
 
+from camera_check import CameraHealth
 from e1 import E1Config, E1Detector, E1Event
 from e2 import E2Config, E2Detector, E2Event
 
@@ -47,18 +48,20 @@ class Pipeline:
         zone_of: Optional[Callable[[float, float], object]] = None,
         calibration_ok: Callable[[float], bool] = lambda t: True,
         stall_s: float = 1.0,
+        camera: Optional[CameraHealth] = None,
     ):
         self.e1 = e1 or E1Detector(E1Config())
         self.e2 = e2
         self.zone_of = zone_of or (lambda x, y: 0)
         self.calibration_ok = calibration_ok
         self.stall_s = stall_s
+        self.camera = camera
         self._last_frame_t: Optional[float] = None
         self._stalled = False
         self._mic_state = "ok"
         self.frames = 0
 
-    def on_frame(self, t: float, tracked: Iterable[tuple]) -> list[dict]:
+    def on_frame(self, t: float, tracked: Iterable[tuple], frame=None) -> list[dict]:
         out: list[dict] = []
         if self._last_frame_t is not None:
             if t < self._last_frame_t:
@@ -69,7 +72,19 @@ class Pipeline:
                 out.append({"v": SCHEMA_VERSION, "src": "HEALTH", "kind": "camera_back", "t": round(t, 3)})
         self._last_frame_t = t
         self.frames += 1
-        for ev in self.e1.update(t, list(tracked), calibration_ok=self.calibration_ok(t), zone_of=self.zone_of):
+        cam_ok = True
+        if self.camera is not None and frame is not None:
+            for tt, state in self.camera.update(t, frame):
+                if state == "ok":
+                    out.append({"v": SCHEMA_VERSION, "src": "HEALTH", "kind": "camera_ok", "t": round(tt, 3)})
+                elif state != "warming":
+                    out.append({"v": SCHEMA_VERSION, "src": "HEALTH", "kind": "camera_fault", "reason": state,
+                                "t": round(tt, 3)})
+            cam_ok = self.camera.ok
+        elif self.camera is not None:
+            cam_ok = self.camera.ok
+        for ev in self.e1.update(t, list(tracked), calibration_ok=self.calibration_ok(t) and cam_ok,
+                                 zone_of=self.zone_of):
             out.append(_e1_dict(ev, self.zone_of(*ev.at)))
         return out
 
@@ -104,7 +119,7 @@ def run_video(weights: str, source, out_path: str, imgsz: int = 480, conf: float
         cap.release()
     model = YOLO(weights, task="detect")
     names = class_names or [model.names[i] for i in sorted(model.names)]
-    pipe = Pipeline()
+    pipe = Pipeline(camera=CameraHealth())
     n_events = 0
     n_dets = 0
     max_tracks = 0
@@ -127,7 +142,7 @@ def run_video(weights: str, source, out_path: str, imgsz: int = 480, conf: float
             n_dets += len(tracked)
             max_tracks = max(max_tracks, len(tracked))
             seen_ids.update(x[0] for x in tracked)
-            for ev in pipe.on_frame(t, tracked):
+            for ev in pipe.on_frame(t, tracked, frame=r.orig_img):
                 f.write(json.dumps(ev) + "\n")
                 f.flush()
                 n_events += 1

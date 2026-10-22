@@ -81,6 +81,7 @@ def main():
     win_inf = []
     fps_rows, temps, inf_all = [], [], []
     seen_bits = 0
+    bits_ok = False
     psutil.cpu_percent(None)  # prime
 
     with open(csv_path, "w", newline="") as f:
@@ -106,6 +107,7 @@ def main():
                     tc = temp_c()
                     bits = throttle_bits()
                     seen_bits |= max(bits, 0)
+                    bits_ok = bits_ok or bits >= 0
                     row = [round(now - t_start), round(fps, 2), round(statistics.median(win_inf), 1),
                            psutil.cpu_percent(None), round(psutil.Process().memory_info().rss / 1e6),
                            tc, hex(bits)]
@@ -128,8 +130,12 @@ def main():
     print(f"fps slowest 5%    : {p5:.2f}")
     print(f"inference ms med  : {statistics.median(inf_all):.1f}")
     print(f"max temp C        : {max(t for t in temps if t == t):.1f}" if any(t == t for t in temps) else "max temp C        : n/a")
-    print(f"undervoltage seen : {bool(seen_bits & 0x10001)}")
-    print(f"throttling seen   : {bool(seen_bits & 0x40004)}")
+    if bits_ok:
+        print(f"undervoltage seen : {bool(seen_bits & 0x10001)}")
+        print(f"throttling seen   : {bool(seen_bits & 0x40004)}")
+    else:
+        print("undervoltage seen : UNKNOWN (vcgencmd not available - install raspberrypi-utils or check dmesg)")
+        print("throttling seen   : UNKNOWN (vcgencmd not available)")
     print(f"csv               : {csv_path}")
 
 

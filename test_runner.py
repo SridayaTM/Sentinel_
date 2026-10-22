@@ -86,3 +86,49 @@ def test_same_input_same_output():
             o += p.on_frame(t, tr)
         return o
     assert go() == go()
+
+
+def test_camera_fault_switches_e1_off_and_is_reported():
+    import numpy as np
+    from camera_check import CameraHealth
+    from test_camera_check import BASE, traffic
+
+    rng = np.random.default_rng(3)
+    a, b = head_on()
+    p = Pipeline(camera=CameraHealth())
+    out = []
+    for t, tr in frames([a, b], 8):
+        frame = traffic(BASE, t, rng) if t < 0.5 else np.zeros((180, 320)) + rng.normal(0, 0.3, (180, 320))
+        out += p.on_frame(t, tr, frame=frame)
+    assert [e for e in out if e["src"] == "E1"] == []
+
+
+def test_healthy_camera_lets_e1_fire_after_warmup():
+    import numpy as np
+    from camera_check import CameraHealth
+    from test_camera_check import BASE, traffic
+
+    rng = np.random.default_rng(4)
+    a, b = head_on(x0a=-900, x0b=-900 + 800 + 600 * (6.0 - 1.1), t_hit=6.0)
+    p = Pipeline(camera=CameraHealth())
+    out = []
+    for t, tr in frames([a, b], 16):
+        out += p.on_frame(t, tr, frame=traffic(BASE, t, rng))
+    kinds = [e["kind"] for e in out]
+    assert "camera_ok" in kinds and "collision" in kinds
+
+
+def test_camera_fault_event_carries_the_reason():
+    import numpy as np
+    from camera_check import CameraHealth
+    from test_camera_check import BASE, traffic
+
+    rng = np.random.default_rng(5)
+    p = Pipeline(camera=CameraHealth())
+    out = []
+    for k in range(250):
+        t = k / 10
+        frame = traffic(BASE, t, rng) if t < 8 else np.zeros((180, 320)) + rng.normal(0, 0.3, (180, 320))
+        out += p.on_frame(t, [], frame=frame)
+    f = [e for e in out if e["kind"] == "camera_fault"]
+    assert f and f[0]["reason"] == "covered"
