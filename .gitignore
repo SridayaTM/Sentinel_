@@ -4,3 +4,5 @@ clips/
 eval_events/
 runs/
 *.zip
+__pycache__/
+bus.jpg
